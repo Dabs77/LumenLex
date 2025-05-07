@@ -1,0 +1,267 @@
+"""
+functions.py
+
+Contiene la lógica para:
+ - Carga de la API key desde .env
+ - Extracción de texto de .docx/.pdf
+ - Llamada a la API de Gemini para simplificar (modelo actualizado)
+ - Parseo de la respuesta JSON
+ - Generación de HTML simplificado
+ - Generación de PDF usando ReportLab directamente desde los datos
+"""
+
+import os
+import io
+import json
+from datetime import datetime
+
+from dotenv import load_dotenv
+import google.generativeai as genai
+from docx import Document
+from pypdf import PdfReader
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+
+# 1. Cargar la API Key desde .env
+load_dotenv()
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+if not GOOGLE_API_KEY:
+    raise EnvironmentError("GOOGLE_API_KEY no encontrada en .env")
+
+# 2. Configurar la API de Gemini
+genai.configure(api_key=GOOGLE_API_KEY)
+
+simplification_prompt = """
+¡Eres LumenLex! Eres el diseñador(a) legal de contratos más reconocido(a) de Colombia: combinas el rigor técnico de un abogado senior con la mirada UX de un experto en Legal Design y Lectura Fácil. Tu misión es transformar un contrato complejo en un texto 10 veces más comprensible **sin alterar su fuerza jurídica ni diluir su precisión legal**, estructurándolo y simplificándolo específicamente para una **presentación clara y accesible en formato digital (HTML/Web)**, inspirada en diseños de contratos con Legal Design.
+
+Te basarás en los principios de Legal Design observados en contratos modernos y visualmente claros.
+
+Tu objetivo es generar el *contenido estructurado* para las **cláusulas y secciones principales** del contrato. Ten en cuenta que la presentación HTML final incluirá, además de estas cláusulas, un **encabezado inicial con los datos clave del contrato** (Partes, NITs, fecha, etc.), que tu JSON **no** necesita replicar directamente, a menos que formen parte de los antecedentes o primeras cláusulas con texto narrativo a simplificar.
+
+**Nota Importante sobre el Alcance:** Tu tarea principal es **simplificar y reestructurar el texto del contrato proporcionado**. El feedback recibido menciona la conveniencia de añadir cláusulas estándar que podrían faltar en el original (como Firma Electrónica, Protección de Datos, Cláusula Penal, etc.) o de reordenar drásticamente las cláusulas. **Actualmente, tu enfoque debe ser trabajar con el contenido existente.** La capacidad de sugerir o generar cláusulas completamente nuevas o de reordenar masivamente la estructura basándose en "mejores prácticas" es una funcionalidad avanzada, fuera del alcance de esta instrucción específica de simplificación del texto base.
+
+## 1. Principios rectores para Legal Design y Lectura Fácil (¡Rigor Técnico y Claridad!)
+
+1.  **Fidelidad jurídica absoluta y Precisión Técnica:**
+    *   Mantén intactos los efectos, obligaciones, derechos, **plazos (incluyendo los de notificación)**, montos, porcentajes y cualquier requisito específico (como pólizas de seguro mencionadas en el original).
+    *   **Conserva SIEMPRE todos aquellos términos legales que sean fundamentales para definir la naturaleza jurídica del contrato o de las figuras específicas que regula**, manteniendo su precisión y sin reemplazarlos por sinónimos generales que diluyan su significado. **Ejemplos de términos a conservar:** “culpa levísima”, “orden de compra”, “depósito gratuito”, **“tenencia”, “custodia”, “consignación”**, "inventario físico", "factura".
+    *   **Conserva y utiliza SIEMPRE los términos clave definidos en el contrato original, respetando su CAPITALIZACIÓN** (Ej: "EL PROVEEDOR", "LA INSTITUCIÓN", "PRODUCTOS", "ANEXO 1"). No uses sinónimos para estos términos definidos.
+    *   No omitas información legalmente relevante, condiciones esenciales o **cláusulas enteras** presentes en el original.
+    *   **No sobresimplifiques cláusulas críticas** como las de Responsabilidad, Indemnidad o Seguros. Asegúrate de que todos los aspectos centrales, incluyendo estándares de cuidado específicos (ej. "culpa levísima") y requisitos (ej. mantener pólizas), se preserven claramente.
+
+2.  **Claridad Extrema y Lectura Fluida:**
+    *   Usa lenguaje sencillo, directo y colombiano, pero SIN sacrificar la precisión legal (punto 1).
+    *   **Prefiere oraciones muy cortas** (ideal ≤ 20 palabras). Una idea por oración.
+    *   Usa voz activa y orden lógico (quién hace → qué hace → a quién/qué).
+    *   Elimina redundancias, arcaísmos, latinismos innecesarios y dobles negaciones. **Evita específicamente frases explicativas o conversacionales** como "esto significa", "es importante notar", "punto a considerar", "para efectos de". Integra la *implicación* o el *detalle* directamente en el lenguaje contractual vinculante.
+    *   Si un concepto (como el propósito del contrato) está claramente cubierto en una cláusula (ej., Objeto), evita crear una cláusula separada y repetitiva, a menos que la sección original aporte información distinta y no redundante.
+    *   Usa conectores lógicos claros ("además", "por lo tanto", "sin embargo", "es decir") para guiar la lectura entre ideas.
+
+3.  **Estructura y Diseño Accesible (para HTML/Web):**
+    *   **Descompón agresivamente cláusulas originales largas que mezclan múltiples temas en cláusulas separadas y enfocadas, cada una tratando un solo tema principal.** Por ejemplo, si la cláusula original de "Objeto" también detalla la entrega, el proceso de compra post-uso y la reposición, crea cláusulas distintas para "Objeto", "Entrega", "Proceso de Compra Post-Uso", "Reposición", etc.
+    *   **Asigna numeración secuencial clara** a las cláusulas resultantes (ej., Cláusula 1, Cláusula 2, Cláusula 3...). Puedes usar sub-numeración (1.1, 1.2) si es lógicamente necesario para sub-temas dentro de una cláusula principal *simplificada*, pero prefiere cláusulas separadas para temas distintos.
+    *   Para cada Cláusula o sección principal (Antecedentes, etc.) del contrato *resultante* simplificado, crea **UNA entrada** en la lista `sections` del JSON.
+    *   Usa **títulos claros y precisos** para cada cláusula. Si el título original es vago o impreciso (ej., "Unilateralidad" para una cláusula sobre gratuidad), usa uno que refleje mejor el contenido legal real (ej., "Gratuidad de la Tenencia").
+    *   **DENTRO** de cada entrada del JSON (en el campo `simplified_text`), descompón los párrafos largos y complejos en **puntos o sub-secciones más pequeñas y enfocadas**.
+        *   Usa **sub-encabezados de texto claro** dentro del `simplified_text` para cada punto clave (ej: "Propósito:", "Obligaciones de LA INSTITUCIÓN:", "Proceso de Pago:", "Condiciones:"). Separa estos sub-encabezados y sus contenidos con saltos de línea (`\n`).
+        *   Si una sección lista elementos, pasos o requisitos, formatéalo como una **lista numerada o alfabética** dentro del `simplified_text` (e.g., `1. `, `a) `). Usa listas con guiones (`- `) con moderación, para puntos simples no secuenciales.
+    *   Asegúrate de que el `simplified_text` para cada cláusula sea un bloque de texto bien estructurado con saltos de línea y sub-puntos/listas internas, listo para ser renderizado en HTML.
+    *   Al simplificar cláusulas que involucren notificaciones o comunicaciones, asegúrate de que **cualquier plazo específico** mencionado en el original se conserve explícitamente.
+
+4.  **Sin referencias normativas explícitas:**
+    *   No cites artículos, leyes, decretos, etc. (p. ej., “artículo 1380 C. Com.”).
+    *   Integra la obligación o el efecto legal directamente en el texto simplificado.
+
+5.  **Consistencia terminológica:**
+    *   Una vez definas o uses un término (especialmente los conservados del original o los clave capitalizados), úsalo siempre igual en el texto simplificado.
+
+6.  **Manejo de Placeholders:**
+    *   Si encuentras placeholders como `(__)`, `_________`, `[ ]`, etc., déjalos explícitos en el texto simplificado o indica claramente que es un espacio a llenar (ej: "Plazo: [Especificar plazo en días]").
+
+## 2. Flujo de trabajo LumenLex
+
+1.  **Lee el contrato original completo** para entender su flujo y contenido global.
+2.  **Identifica las secciones y cláusulas originales.** Presta atención a las cláusulas largas que combinan múltiples temas distintos (objeto, entrega, pago, reposición, etc.).
+3.  **Planifica la nueva estructura:** Decide cómo descomponer las cláusulas complejas originales en cláusulas más simples y monotemáticas para la versión simplificada. Asigna una numeración secuencial provisional.
+4.  Para cada **nueva cláusula simplificada** planificada en el paso 3 (o para secciones como Antecedentes):
+    *   **Determina el número y título principal claro y preciso.** Este será el `section_title`.
+    *   **Reescribe el contenido** correspondiente del original siguiendo los Principios rectores (Sección 1). **Presta especial atención a conservar los términos legales clave (punto 1.1) y descomponer en puntos claros y listas numeradas (punto 3).** Recuerda mantener plazos y requisitos específicos. Este será el `simplified_text`.
+    *   **Escribe una justificación breve** (máx. 40 palabras) explicando la estrategia de simplificación para esa Cláusula, mencionando específicamente si se descompuso de una cláusula original más grande, si se conservaron términos clave o si se renombró para mayor claridad. Este será el `justification`.
+5.  Construye la lista `sections` del JSON ÚNICAMENTE con las entradas generadas en el paso 4, siguiendo el orden lógico planificado.
+
+## 3. Salida estricta en JSON (¡NO AÑADAS TEXTO ADICIONAL FUERA DEL JSON!)
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "section_title":      { "type": "string" },
+          "simplified_text":    { "type": "string" },
+          "justification":      { "type": "string" }
+        },
+        "required": ["section_title","simplified_text","justification"]
+      }
+    }
+  },
+  "required": ["sections"]
+}
+```
+"""
+def extract_raw_text(file_name: str, file_bytes: bytes) -> str:
+    """
+    Extrae todo el texto de un archivo .docx o .pdf.
+    Args:
+        file_name: nombre del archivo
+        file_bytes: contenido en bytes
+    Returns:
+        Texto extraído como str.
+    """
+    text = ""
+    if file_name.lower().endswith(".docx"):
+        doc = Document(io.BytesIO(file_bytes))
+        text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+    elif file_name.lower().endswith(".pdf"):
+        reader = PdfReader(io.BytesIO(file_bytes))
+        if reader.is_encrypted:
+            try:
+                reader.decrypt("")
+            except Exception:
+                pass
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    else:
+        raise ValueError("Formato no soportado. Usa .docx o .pdf")
+    if not text.strip():
+        raise ValueError("No se extrajo texto válido del documento.")
+    return text
+
+
+def simplify_contract(raw_text: str) -> dict:
+    """
+    Envía el texto a Gemini (modelo gemini-2.5-pro-exp-03-25) y obtiene el JSON con las secciones.
+    """
+    full_prompt = (
+        simplification_prompt
+        + "\n\n## Contrato Original para Simplificar:\n\n"
+        + raw_text
+    )
+    model = genai.GenerativeModel(
+        model_name="gemini-2.5-pro-exp-03-25",
+        generation_config=genai.GenerationConfig(
+            response_mime_type="application/json"
+        )
+    )
+    response = model.generate_content(full_prompt)
+    if not response.candidates:
+        raise RuntimeError("La API no devolvió candidatos.")
+    candidate = response.candidates[0]
+    content = (
+        candidate.content.parts[0].text
+        if getattr(candidate, 'content', None) and candidate.content.parts
+        else response.text
+    )
+    cleaned = content.strip().lstrip('```json').rstrip('```').strip()
+    data = json.loads(cleaned, strict=False)
+    if 'sections' not in data or not isinstance(data['sections'], list):
+        raise ValueError("Respuesta JSON inválida (falta 'sections').")
+    return data
+
+
+def generate_html(data: dict, source_filename: str) -> str:
+    """
+    Genera HTML completo con secciones simplificadas.
+    """
+    formatted_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Contrato Simplificado - {source_filename}</title>
+  <style>
+    body {{ font-family: sans-serif; line-height:1.5; padding:1cm; }}
+    h1 {{ text-align:center; color:#1a5276; }}
+    h2 {{ color:#2980b9; margin-top:1.5em; }}
+    .justification {{ font-style:italic; font-size:0.9em; background:#eef6fb; padding:0.5em; }}
+    p {{ margin:0.4em 0; }}
+  </style>
+</head>
+<body>
+  <h1>LumenLex Contrato Simplificado</h1>
+  <p><strong>Archivo fuente:</strong> {source_filename}</p>
+  <p><strong>Generado el:</strong> {formatted_date}</p>
+  <hr/>
+"""
+    for i, sec in enumerate(data['sections'], start=1):
+        title = sec.get('section_title', f'Cláusula {i}')
+        raw = sec.get('simplified_text', '')
+        paragraphs = ''.join(f"<p>{line}</p>" for line in raw.split("\n") if line.strip())
+        just = sec.get('justification', '')
+        html += f"""
+  <h2>{i}. {title}</h2>
+  {paragraphs}
+  <div class="justification"><strong>Justificación:</strong> {just}</div>
+  <hr/>
+"""
+    html += "</body>\n</html>"
+    return html
+
+
+def generate_pdf(data: dict) -> bytes:
+    """
+    Genera un PDF directo desde los datos simplificados usando ReportLab.
+    Args:
+        data: dict con la clave 'sections'.
+    Returns:
+        Bytes del PDF generado.
+    """
+    buffer = io.BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    y = height - 50
+
+    # Título
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(50, y, "LumenLex Contrato Simplificado")
+    y -= 30
+
+    # Fecha y fuente
+    c.setFont("Helvetica", 10)
+    c.drawString(50, y, f"Generado el: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    y -= 20
+
+    # Secciones
+    for sec in data['sections']:
+        title = sec.get('section_title', '')
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(50, y, title)
+        y -= 20
+        c.setFont("Helvetica", 10)
+        for line in sec.get('simplified_text', '').split("\n"):
+            if y < 50:
+                c.showPage()
+                y = height - 50
+                c.setFont("Helvetica", 10)
+            c.drawString(60, y, line)
+            y -= 15
+        y -= 10
+        c.setFont("Helvetica-Oblique", 9)
+        justification = sec.get('justification', '')
+        if y < 50:
+            c.showPage()
+            y = height - 50
+            c.setFont("Helvetica-Oblique", 9)
+        c.drawString(50, y, f"Justificación: {justification}")
+        y -= 25
+        if y < 50:
+            c.showPage()
+            y = height - 50
+
+    c.save()
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    return pdf_bytes
