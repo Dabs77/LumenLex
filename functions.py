@@ -20,7 +20,6 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 from docx import Document
 from pypdf import PdfReader
-import pdfkit
 
 
 # 1. Cargar la API Key desde .env
