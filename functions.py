@@ -20,14 +20,19 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 from docx import Document
 from pypdf import PdfReader
+import streamlit as st
 
+# 1. Cargar la API Key
+def load_api_key():
+    load_dotenv()  # variables locales
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or st.secrets.get("GOOGLE_API_KEY")
+    if not GOOGLE_API_KEY:
+        raise EnvironmentError(
+            "GOOGLE_API_KEY no encontrada. Defínela en un archivo .env local o en Streamlit secrets"
+        )
+    return GOOGLE_API_KEY
 
-# 1. Cargar la API Key desde .env
-load_dotenv()
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-if not GOOGLE_API_KEY:
-    raise EnvironmentError("GOOGLE_API_KEY no encontrada en .env")
-
+GOOGLE_API_KEY = load_api_key()
 # 2. Configurar la API de Gemini
 genai.configure(api_key=GOOGLE_API_KEY)
 
