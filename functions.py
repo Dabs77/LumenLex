@@ -12,6 +12,7 @@ Contiene la lógica para:
 
 import os
 import io
+from xhtml2pdf import pisa
 import json
 from datetime import datetime
 
@@ -220,10 +221,28 @@ def generate_html(data: dict, source_filename: str) -> str:
 
 def generate_pdf_from_html(html_content: str) -> bytes:
     """
-    Genera un PDF desde HTML usando pdfkit (wkhtmltopdf).
-    Requiere instalar wkhtmltopdf y python-pdfkit.
-    Returns bytes del PDF.
+    Genera un PDF desde HTML usando xhtml2pdf (pisa).
+    Inyecta CSS específico para PDF sin afectar la vista HTML en navegador.
     """
-    # Opcional: especificar ruta a wkhtmltopdf si no está en PATH
-    # config = pdfkit.configuration(wkhtmltopdf=r"C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe")
-    return pdfkit.from_string(html_content, False)
+    # CSS adicional solo para PDF: reduce márgenes y espacios
+    override_css = """
+    <style>
+      p { margin:1px 0 !important; padding:0 !important; }
+      h1 { margin:2px 0 !important; }
+      h2 { margin:2px 0 !important; }
+      hr { margin:2px 0 !important; }
+    </style>
+    """
+    # Insertar override_css justo antes de </head>
+    if '</head>' in html_content:
+        html_pdf = html_content.replace('</head>', f"{override_css}</head>")
+    else:
+        # si no encuentra head, anteponer al inicio
+        html_pdf = override_css + html_content
+
+    result = io.BytesIO()
+    # Pisa renderiza el HTML modificado
+    status = pisa.CreatePDF(src=html_pdf, dest=result)
+    if status.err:
+        raise RuntimeError("Error generando PDF con xhtml2pdf")
+    return result.getvalue()
