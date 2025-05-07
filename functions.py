@@ -4,10 +4,10 @@ functions.py
 Contiene la lógica para:
  - Carga de la API key desde .env
  - Extracción de texto de .docx/.pdf
- - Llamada a la API de Gemini para simplificar (modelo actualizado)
+ - Llamada a la API de Gemini para simplificar (modelo gemini-2.5-pro-exp-03-25)
  - Parseo de la respuesta JSON
  - Generación de HTML simplificado
- - Generación de PDF usando ReportLab directamente desde los datos
+ - Generación de PDF desde HTML usando WeasyPrint
 """
 
 import os
@@ -19,8 +19,8 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 from docx import Document
 from pypdf import PdfReader
-from reportlab.pdfgen import canvas
-from reportlab.lib.pagesizes import A4
+import pdfkit
+
 
 # 1. Cargar la API Key desde .env
 load_dotenv()
@@ -116,12 +116,11 @@ def extract_raw_text(file_name: str, file_bytes: bytes) -> str:
     """
     Extrae todo el texto de un archivo .docx o .pdf.
     Args:
-        file_name: nombre del archivo
-        file_bytes: contenido en bytes
+        file_name: nombre del archivo (extensión)
+        file_bytes: contenido binario
     Returns:
-        Texto extraído como str.
+        Texto extraído como str
     """
-    text = ""
     if file_name.lower().endswith(".docx"):
         doc = Document(io.BytesIO(file_bytes))
         text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
@@ -142,20 +141,23 @@ def extract_raw_text(file_name: str, file_bytes: bytes) -> str:
 
 def simplify_contract(raw_text: str) -> dict:
     """
-    Envía el texto a Gemini (modelo gemini-2.5-pro-exp-03-25) y obtiene el JSON con las secciones.
+    Envía el texto a Gemini (modelo gemini-2.5-pro-exp-03-25)
+    y devuelve el JSON con secciones simplificadas.
+    Args:
+        raw_text: contrato original en texto
+    Returns:
+        Dict con clave 'sections'
     """
-    full_prompt = (
+    prompt = (
         simplification_prompt
         + "\n\n## Contrato Original para Simplificar:\n\n"
         + raw_text
     )
     model = genai.GenerativeModel(
         model_name="gemini-2.5-pro-exp-03-25",
-        generation_config=genai.GenerationConfig(
-            response_mime_type="application/json"
-        )
+        generation_config=genai.GenerationConfig(response_mime_type="application/json")
     )
-    response = model.generate_content(full_prompt)
+    response = model.generate_content(prompt)
     if not response.candidates:
         raise RuntimeError("La API no devolvió candidatos.")
     candidate = response.candidates[0]
@@ -167,15 +169,20 @@ def simplify_contract(raw_text: str) -> dict:
     cleaned = content.strip().lstrip('```json').rstrip('```').strip()
     data = json.loads(cleaned, strict=False)
     if 'sections' not in data or not isinstance(data['sections'], list):
-        raise ValueError("Respuesta JSON inválida (falta 'sections').")
+        raise ValueError("Respuesta JSON inválida: falta 'sections'.")
     return data
 
 
 def generate_html(data: dict, source_filename: str) -> str:
     """
-    Genera HTML completo con secciones simplificadas.
+    Construye y devuelve un string HTML con secciones simplificadas.
+    Args:
+        data: dict con 'sections'
+        source_filename: nombre del archivo original
+    Returns:
+        HTML listo para renderizar
     """
-    formatted_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     html = f"""<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -193,75 +200,30 @@ def generate_html(data: dict, source_filename: str) -> str:
 <body>
   <h1>LumenLex Contrato Simplificado</h1>
   <p><strong>Archivo fuente:</strong> {source_filename}</p>
-  <p><strong>Generado el:</strong> {formatted_date}</p>
+  <p><strong>Generado el:</strong> {date_str}</p>
   <hr/>
 """
     for i, sec in enumerate(data['sections'], start=1):
         title = sec.get('section_title', f'Cláusula {i}')
         raw = sec.get('simplified_text', '')
-        paragraphs = ''.join(f"<p>{line}</p>" for line in raw.split("\n") if line.strip())
+        paras = ''.join(f"<p>{line}</p>" for line in raw.split("\n") if line.strip())
         just = sec.get('justification', '')
         html += f"""
   <h2>{i}. {title}</h2>
-  {paragraphs}
-  <div class="justification"><strong>Justificación:</strong> {just}</div>
+  {paras}
+  <div class=\"justification\"><strong>Justificación:</strong> {just}</div>
   <hr/>
 """
     html += "</body>\n</html>"
     return html
 
 
-def generate_pdf(data: dict) -> bytes:
+def generate_pdf_from_html(html_content: str) -> bytes:
     """
-    Genera un PDF directo desde los datos simplificados usando ReportLab.
-    Args:
-        data: dict con la clave 'sections'.
-    Returns:
-        Bytes del PDF generado.
+    Genera un PDF desde HTML usando pdfkit (wkhtmltopdf).
+    Requiere instalar wkhtmltopdf y python-pdfkit.
+    Returns bytes del PDF.
     """
-    buffer = io.BytesIO()
-    c = canvas.Canvas(buffer, pagesize=A4)
-    width, height = A4
-    y = height - 50
-
-    # Título
-    c.setFont("Helvetica-Bold", 16)
-    c.drawString(50, y, "LumenLex Contrato Simplificado")
-    y -= 30
-
-    # Fecha y fuente
-    c.setFont("Helvetica", 10)
-    c.drawString(50, y, f"Generado el: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    y -= 20
-
-    # Secciones
-    for sec in data['sections']:
-        title = sec.get('section_title', '')
-        c.setFont("Helvetica-Bold", 12)
-        c.drawString(50, y, title)
-        y -= 20
-        c.setFont("Helvetica", 10)
-        for line in sec.get('simplified_text', '').split("\n"):
-            if y < 50:
-                c.showPage()
-                y = height - 50
-                c.setFont("Helvetica", 10)
-            c.drawString(60, y, line)
-            y -= 15
-        y -= 10
-        c.setFont("Helvetica-Oblique", 9)
-        justification = sec.get('justification', '')
-        if y < 50:
-            c.showPage()
-            y = height - 50
-            c.setFont("Helvetica-Oblique", 9)
-        c.drawString(50, y, f"Justificación: {justification}")
-        y -= 25
-        if y < 50:
-            c.showPage()
-            y = height - 50
-
-    c.save()
-    pdf_bytes = buffer.getvalue()
-    buffer.close()
-    return pdf_bytes
+    # Opcional: especificar ruta a wkhtmltopdf si no está en PATH
+    # config = pdfkit.configuration(wkhtmltopdf=r"C:\Program Files\wkhtmltopdf\bin\wkhtmltopdf.exe")
+    return pdfkit.from_string(html_content, False)

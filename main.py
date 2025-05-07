@@ -10,59 +10,53 @@ from functions import (
     extract_raw_text,
     simplify_contract,
     generate_html,
-    generate_pdf,
+    generate_pdf_from_html,
 )
 
 def main():
     st.set_page_config(page_title="LumenLex Simplificador", layout="wide")
     st.title("🖋️ LumenLex - Simplificación de Contratos")
 
-    uploaded = st.file_uploader(
-        "Sube tu contrato (.docx o .pdf)", type=["docx", "pdf"]
-    )
+    uploaded = st.file_uploader("Sube tu contrato (.docx o .pdf)", type=["docx", "pdf"])
     if not uploaded:
         return
 
-    # Paso 1: Extraer texto inmediatamente y mostrar área de texto
+    # Extraer texto en session_state
     if 'extracted_text' not in st.session_state:
-        with st.spinner("Extrayendo texto del documento..."):
+        with st.spinner("Extrayendo texto..."):
             raw = extract_raw_text(uploaded.name, uploaded.getvalue())
             st.session_state.extracted_text = raw
-    else:
-        raw = st.session_state.extracted_text
+    raw = st.session_state.extracted_text
 
     st.subheader("Texto extraído:")
     st.text_area("", raw, height=200)
 
-    # Paso 2: Botón para simplificar
     if st.button("🚀 Simplificar Contrato"):
         try:
             with st.spinner("Simplificando con Gemini..."):
-                result = simplify_contract(raw)
-            html = generate_html(result, uploaded.name)
+                data = simplify_contract(raw)
 
+            html = generate_html(data, uploaded.name)
             st.header("✅ Vista HTML")
-            components.html(html, height=600)
+            components.html(html, height=800, scrolling=True)
 
             st.header("📥 Descargas")
             st.download_button(
-                "Descargar JSON",
-                data=json.dumps(result, indent=2, ensure_ascii=False),
+                "Descargar JSON", json.dumps(data, indent=2, ensure_ascii=False),
                 file_name=f"simplificado_{uploaded.name}.json",
                 mime="application/json"
             )
             st.download_button(
-                "Descargar HTML",
-                data=html,
+                "Descargar HTML", html,
                 file_name=f"simplificado_{uploaded.name}.html",
                 mime="text/html"
             )
 
-            pdf_bytes = generate_pdf(result)
+            # PDF desde HTML
+            pdf_bytes = generate_pdf_from_html(html)
             st.download_button(
-                "Descargar PDF",
-                data=pdf_bytes,
-                file_name=f"simplificado_{uploaded.name}.pdf",
+                "Descargar PDF", pdf_bytes,
+                file_name=f"simplificado_{uploaded.name}_export.pdf",
                 mime="application/pdf"
             )
 
@@ -71,6 +65,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
