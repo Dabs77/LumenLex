@@ -159,7 +159,7 @@ def simplify_contract(raw_text: str) -> dict:
         + raw_text
     )
     model = genai.GenerativeModel(
-        model_name="gemini-2.5-pro-exp-03-25",
+        model_name="gemini-2.5-flash-preview-04-17",
         generation_config=genai.GenerationConfig(response_mime_type="application/json")
     )
     response = model.generate_content(prompt)
