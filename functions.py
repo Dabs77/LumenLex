@@ -15,7 +15,7 @@ import io
 from xhtml2pdf import pisa
 import json
 from datetime import datetime
-
+from graphviz import Digraph
 from dotenv import load_dotenv
 import google.generativeai as genai
 from docx import Document
@@ -49,7 +49,7 @@ Tu objetivo es generar el *contenido estructurado* para las **cláusulas y secci
 
 1.  **Fidelidad jurídica absoluta y Precisión Técnica:**
     *   Mantén intactos los efectos, obligaciones, derechos, **plazos (incluyendo los de notificación)**, montos, porcentajes y cualquier requisito específico (como pólizas de seguro mencionadas en el original).
-    *   **Conserva SIEMPRE todos aquellos términos legales que sean fundamentales para definir la naturaleza jurídica del contrato o de las figuras específicas que regula**, manteniendo su precisión y sin reemplazarlos por sinónimos generales que diluyan su significado. **Ejemplos de términos a conservar:** “culpa levísima”, “orden de compra”, “depósito gratuito”, **“tenencia”, “custodia”, “consignación”**, "inventario físico", "factura".
+    *   **Conserva SIEMPRE todos aquellos términos legales que sean fundamentales para definir la naturaleza jurídica del contrato o de las figuras específicas que regula**, manteniendo su precisión y sin reemplazarlos por sinónimos generales que diluyan su significado. **Ejemplos de términos a conservar:** "culpa levísima", "orden de compra", "depósito gratuito", **"tenencia", "custodia", "consignación"**, "inventario físico", "factura".
     *   **Conserva y utiliza SIEMPRE los términos clave definidos en el contrato original, respetando su CAPITALIZACIÓN** (Ej: "EL PROVEEDOR", "LA INSTITUCIÓN", "PRODUCTOS", "ANEXO 1"). No uses sinónimos para estos términos definidos.
     *   No omitas información legalmente relevante, condiciones esenciales o **cláusulas enteras** presentes en el original.
     *   **No sobresimplifiques cláusulas críticas** como las de Responsabilidad, Indemnidad o Seguros. Asegúrate de que todos los aspectos centrales, incluyendo estándares de cuidado específicos (ej. "culpa levísima") y requisitos (ej. mantener pólizas), se preserven claramente.
@@ -67,14 +67,11 @@ Tu objetivo es generar el *contenido estructurado* para las **cláusulas y secci
     *   **Asigna numeración secuencial clara** a las cláusulas resultantes (ej., Cláusula 1, Cláusula 2, Cláusula 3...). Puedes usar sub-numeración (1.1, 1.2) si es lógicamente necesario para sub-temas dentro de una cláusula principal *simplificada*, pero prefiere cláusulas separadas para temas distintos.
     *   Para cada Cláusula o sección principal (Antecedentes, etc.) del contrato *resultante* simplificado, crea **UNA entrada** en la lista `sections` del JSON.
     *   Usa **títulos claros y precisos** para cada cláusula. Si el título original es vago o impreciso (ej., "Unilateralidad" para una cláusula sobre gratuidad), usa uno que refleje mejor el contenido legal real (ej., "Gratuidad de la Tenencia").
-    *   **DENTRO** de cada entrada del JSON (en el campo `simplified_text`), descompón los párrafos largos y complejos en **puntos o sub-secciones más pequeñas y enfocadas**.
-        *   Usa **sub-encabezados de texto claro** dentro del `simplified_text` para cada punto clave (ej: "Propósito:", "Obligaciones de LA INSTITUCIÓN:", "Proceso de Pago:", "Condiciones:"). Separa estos sub-encabezados y sus contenidos con saltos de línea (`\n`).
-        *   Si una sección lista elementos, pasos o requisitos, formatéalo como una **lista numerada o alfabética** dentro del `simplified_text` (e.g., `1. `, `a) `). Usa listas con guiones (`- `) con moderación, para puntos simples no secuenciales.
-    *   Asegúrate de que el `simplified_text` para cada cláusula sea un bloque de texto bien estructurado con saltos de línea y sub-puntos/listas internas, listo para ser renderizado en HTML.
+    *   **DENTRO** de cada entrada del JSON (en el campo `simplified_text`), el texto debe estar redactado únicamente en forma de párrafos corridos, sin usar listas, bullets, viñetas, ni numeraciones. Todas las ideas deben estar hiladas en párrafos, separadas solo por puntos y comas. NO uses listas ni saltos de línea para separar puntos.
     *   Al simplificar cláusulas que involucren notificaciones o comunicaciones, asegúrate de que **cualquier plazo específico** mencionado en el original se conserve explícitamente.
 
 4.  **Sin referencias normativas explícitas:**
-    *   No cites artículos, leyes, decretos, etc. (p. ej., “artículo 1380 C. Com.”).
+    *   No cites artículos, leyes, decretos, etc. (p. ej., "artículo 1380 C. Com.").
     *   Integra la obligación o el efecto legal directamente en el texto simplificado.
 
 5.  **Consistencia terminológica:**
@@ -90,32 +87,43 @@ Tu objetivo es generar el *contenido estructurado* para las **cláusulas y secci
 3.  **Planifica la nueva estructura:** Decide cómo descomponer las cláusulas complejas originales en cláusulas más simples y monotemáticas para la versión simplificada. Asigna una numeración secuencial provisional.
 4.  Para cada **nueva cláusula simplificada** planificada en el paso 3 (o para secciones como Antecedentes):
     *   **Determina el número y título principal claro y preciso.** Este será el `section_title`.
-    *   **Reescribe el contenido** correspondiente del original siguiendo los Principios rectores (Sección 1). **Presta especial atención a conservar los términos legales clave (punto 1.1) y descomponer en puntos claros y listas numeradas (punto 3).** Recuerda mantener plazos y requisitos específicos. Este será el `simplified_text`.
+    *   **Reescribe el contenido** correspondiente del original siguiendo los Principios rectores (Sección 1). **Presta especial atención a conservar los términos legales clave (punto 1.1) y descomponer en puntos claros y listas numeradas (punto 3).** Recuerda mantener plazos y requisitos específicos. Así mismo recuerda que el texto debe estar escrito en forma de parrafos, recuerda que queremos simplificar el documento pero manteniendo la estructura de parrafos. Este será el `simplified_text`.
     *   **Escribe una justificación breve** (máx. 40 palabras) explicando la estrategia de simplificación para esa Cláusula, mencionando específicamente si se descompuso de una cláusula original más grande, si se conservaron términos clave o si se renombró para mayor claridad. Este será el `justification`.
 5.  Construye la lista `sections` del JSON ÚNICAMENTE con las entradas generadas en el paso 4, siguiendo el orden lógico planificado.
 
 ## 3. Salida estricta en JSON (¡NO AÑADAS TEXTO ADICIONAL FUERA DEL JSON!)
 
+"""
+
+diagramaprompt= """
+Eres un asistente especializado en transformar contratos legales en diagramas de flujo estructurados. Al recibir el texto completo de un contrato, tu tarea es analizarlo y devolver únicamente un objeto JSON con esta forma:
+Responde solo con el JSON, no añadas texto adicional.
 ```json
 {
-  "type": "object",
-  "properties": {
-    "sections": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "section_title":      { "type": "string" },
-          "simplified_text":    { "type": "string" },
-          "justification":      { "type": "string" }
-        },
-        "required": ["section_title","simplified_text","justification"]
-      }
-    }
-  },
-  "required": ["sections"]
+  "flowchart": {
+    "nodes": [
+      {
+        "id": "start",             // identificador único, sin espacios
+        "type": "start",           // uno de: "start", "process", "decision", "end"
+        "label": "Firma del Contrato",  
+        "metadata": {              // datos adicionales relevantes
+          "date": "2025-06-01",
+          "parties": ["Cliente A", "Proveedor B"]
+        }
+      },
+      … más nodos …
+    ],
+    "edges": [
+      {
+        "from": "start",           // id del nodo origen
+        "to": "approval",          // id del nodo destino
+        "label": ""                // condición o texto de la arista (opcional)
+      },
+      … más aristas …
+    ]
+  }
 }
-```
+
 """
 def extract_raw_text(file_name: str, file_bytes: bytes) -> str:
     """
@@ -154,8 +162,9 @@ def simplify_contract(raw_text: str) -> dict:
         Dict con clave 'sections'
     """
     prompt = (
-        simplification_prompt
-        + "\n\n## Contrato Original para Simplificar:\n\n"
+        simplification_prompt +
+        "\n\nRECUERDA: El texto simplificado de cada sección debe estar redactado ÚNICAMENTE en forma de párrafos corridos, sin bullets, sin listas, sin viñetas, sin numeraciones, sin saltos de línea innecesarios. Todas las ideas deben estar hiladas en párrafos, separadas solo por puntos y comas. NO uses listas ni saltos de línea para separar puntos.\n" +
+        "\n\n## Contrato Original para Simplificar:\n\n"
         + raw_text
     )
     model = genai.GenerativeModel(
@@ -250,3 +259,97 @@ def generate_pdf_from_html(html_content: str) -> bytes:
     if status.err:
         raise RuntimeError("Error generando PDF con xhtml2pdf")
     return result.getvalue()
+
+
+def refine_section_with_instruction(section: dict, instruction: str) -> dict:
+    """
+    Recibe una sección JSON (section_title, simplified_text, justification)
+    y una instrucción para refinar la sección.
+
+    Retorna la sección refinada con el mismo formato JSON esperado.
+
+    NOTA: Usa el modelo Gemini, prompt adaptado para recibir solo la sección y la instrucción.
+    """
+    prompt = f"""
+Eres LumenLex. Ya simplificaste la siguiente cláusula de un contrato:
+
+Título: {section['section_title']}
+
+Texto simplificado actual:
+\"\"\"
+{section['simplified_text']}
+\"\"\"
+
+Justificación actual:
+\"\"\"
+{section.get('justification', '')}
+\"\"\"
+
+Por favor, refina este texto aplicando la siguiente instrucción:
+\"\"\"
+{instruction}
+\"\"\"
+
+Devuelve solo el JSON con los campos:
+- section_title: el título puede ser ajustado o igual
+- simplified_text: el texto refinado
+- justification: una nueva justificación breve explicando el cambio (máximo 40 palabras)
+
+Sigue exactamente este formato JSON, sin añadir texto extra fuera del JSON:
+{{
+  "section_title": "...",
+  "simplified_text": "...",
+  "justification": "..."
+}}
+"""
+    model = genai.GenerativeModel(
+        model_name="gemini-2.5-flash-preview-04-17",
+        generation_config=genai.GenerationConfig(response_mime_type="application/json")
+    )
+    response = model.generate_content(prompt)
+    if not response.candidates:
+        raise RuntimeError("La API no devolvió candidatos.")
+
+    candidate = response.candidates[0]
+    content = (
+        candidate.content.parts[0].text
+        if getattr(candidate, 'content', None) and candidate.content.parts
+        else response.text
+    )
+    cleaned = content.strip().lstrip('```json').rstrip('```').strip()
+    refined_section = json.loads(cleaned, strict=False)
+
+    # Validar claves mínimas
+    if not all(k in refined_section for k in ("section_title", "simplified_text", "justification")):
+        raise ValueError("Respuesta JSON inválida de refinamiento")
+
+    return refined_section
+
+
+def refine_all_sections_with_instruction(data: dict, instruction: str) -> dict:
+    """
+    Recibe el dict completo del contrato simplificado (con 'sections') y una instrucción global.
+    Retorna un nuevo dict con todas las secciones refinadas usando la instrucción.
+    """
+    refined_sections = []
+    for section in data.get('sections', []):
+        refined = refine_section_with_instruction(section, instruction)
+        refined_sections.append(refined)
+    return {"sections": refined_sections}
+def json_to_flowchart(data):
+    dot = Digraph(comment='Diagrama de Flujo')
+    dot.attr(rankdir='LR')
+    shape_map = {'start':'circle','end':'doublecircle','process':'box','decision':'diamond'}
+    
+    for node in data['flowchart']['nodes']:
+        node_id = node['id']
+        dot.node(node_id, label=node['label'], shape=shape_map.get(node.get('type','process'),'box'))
+    
+    for edge in data['flowchart']['edges']:
+        frm, to = edge['from'], edge['to']
+        if edge.get('label'):
+            dot.edge(frm, to, label=edge['label'])
+        else:
+            dot.edge(frm, to)
+    
+    return dot
