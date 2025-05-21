@@ -15,7 +15,6 @@ import io
 from xhtml2pdf import pisa
 import json
 from datetime import datetime
-from graphviz import Digraph
 from dotenv import load_dotenv
 import google.generativeai as genai
 from docx import Document
