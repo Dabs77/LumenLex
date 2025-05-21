@@ -8,7 +8,13 @@ from functions import (
     generate_pdf_from_html,
     # agregamos esta función para la edición por sección:
     refine_section_with_instruction,
-    refine_all_sections_with_instruction
+    refine_all_sections_with_instruction,
+    contract_to_visualization_json,
+    render_timeline,
+    render_comparison,
+    render_hierarchy,
+    render_relation,
+    render_geography
 )
 
 RAW_KEY = 'raw_text'
@@ -16,6 +22,7 @@ DATA_KEY = 'simplified_data'
 HTML_KEY = 'simplified_html'
 PDF_KEY = 'pdf_bytes'
 UPLOADED_NAME_KEY = 'uploaded_name'
+PAGES = ["Simplificación", "Visualización Gráfica"]
 
 
 def regenerate_outputs():
@@ -43,6 +50,15 @@ def main():
         """,
         unsafe_allow_html=True
     )
+
+    page = st.sidebar.radio("Navegación", PAGES)
+    if page == "Simplificación":
+        simplification_page()
+    elif page == "Visualización Gráfica":
+        visualization_page()
+
+
+def simplification_page():
     st.title("🖋️ LumenLex - Simplificación de Contratos")
 
     uploaded = st.file_uploader("Sube tu contrato (.docx o .pdf)", type=["docx", "pdf"])
@@ -150,8 +166,44 @@ def main():
             file_name=f"simplificado_{st.session_state[UPLOADED_NAME_KEY]}.pdf",
             mime="application/pdf"
         )
+        st.markdown("---")
+        st.markdown("### ¿Quieres ver una visualización gráfica del contrato?")
+        if st.button("Ir a Visualización Gráfica"):
+            st.session_state['go_to_visualization'] = True
+            st.experimental_rerun()
 
 
+def visualization_page():
+    st.title("📊 Visualización Gráfica del Contrato")
+    raw = st.session_state.get('raw_text', None)
+    if not raw:
+        st.warning("Primero debes subir y procesar un contrato en la página de Simplificación.")
+        return
+    if st.button("Generar visualización gráfica con Gemini"):
+        with st.spinner("Consultando Gemini y generando visualización..."):
+            data = contract_to_visualization_json(raw)
+            st.session_state['visualization_data'] = data
+    data = st.session_state.get('visualization_data', None)
+    if data:
+        st.subheader(f"Tipo de visualización: {data['category']}")
+        params = data['parameters']
+        if data['category'] == 'tiempo':
+            fig = render_timeline(params)
+            st.plotly_chart(fig, use_container_width=True)
+        elif data['category'] == 'comparación':
+            fig = render_comparison(params)
+            st.plotly_chart(fig, use_container_width=True)
+        elif data['category'] == 'jerarquía':
+            src = render_hierarchy(params)
+            st.graphviz_chart(src)
+        elif data['category'] == 'relación':
+            fig = render_relation(params)
+            st.pyplot(fig)
+        elif data['category'] == 'geografía':
+            fig = render_geography(params)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("Tipo de visualización no soportado para renderizado automático.")
 
 
 if __name__ == "__main__":

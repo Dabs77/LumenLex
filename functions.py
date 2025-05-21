@@ -20,7 +20,12 @@ import google.generativeai as genai
 from docx import Document
 from pypdf import PdfReader
 import streamlit as st
-
+import plotly.graph_objects as go
+import networkx as nx
+import matplotlib.pyplot as plt
+import anytree
+from anytree.exporter import DotExporter
+from graphviz import Source
 # 1. Cargar la API Key
 def load_api_key():
     load_dotenv()  # variables locales
@@ -94,38 +99,147 @@ Nunca uses el símbolo $ en el texto simplificado. Siempre escribe la palabra "p
 5.  Construye la lista `sections` del JSON ÚNICAMENTE con las entradas generadas en el paso 4, siguiendo el orden lógico planificado.
 
 ## 3. Salida estricta en JSON (¡NO AÑADAS TEXTO ADICIONAL FUERA DEL JSON!)
-
+json
+{
+  "type": "object",
+  "properties": {
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "section_title":      { "type": "string" },
+          "simplified_text":   { "type": "string" },
+          "justification":      { "type": "string" }
+        },
+        "required": ["section_title","simplified_text","justification"]
+      }
+    }
+  },
+  "required": ["sections"]
+}
 """
 
 diagramaprompt= """
-Eres un asistente especializado en transformar contratos legales en diagramas de flujo estructurados. Al recibir el texto completo de un contrato, tu tarea es analizarlo y devolver únicamente un objeto JSON con esta forma:
-Responde solo con el JSON, no añadas texto adicional.
-```json
+Analiza el anterior texto y determina qué tipo de visualización necesita.
+
+IMPORTANTE: Si generas un grafo de relación, asegúrate de que los valores de x e y de los nodos estén suficientemente separados (por ejemplo, usa valores entre -100 y 100, pero evita que varios nodos tengan valores muy cercanos). Además, si hay relaciones de dirección, indícalo en la estructura (usa conexiones dirigidas).
+
+Genera una respuesta en formato JSON siguiendo una de estas estructuras según el tipo de visualización, es importante que solo devuelvas el JSON y nada más de texto:
+
+1. Para LÍNEA DE TIEMPO:
 {
-  "flowchart": {
-    "nodes": [
+  "category": "tiempo",
+  "parameters": {
+    "isTimeline": true,
+    "title": "Título descriptivo",
+    "events": [
       {
-        "id": "start",             // identificador único, sin espacios
-        "type": "start",           // uno de: "start", "process", "decision", "end"
-        "label": "Firma del Contrato",  
-        "metadata": {              // datos adicionales relevantes
-          "date": "2025-06-01",
-          "parties": ["Cliente A", "Proveedor B"]
-        }
-      },
-      … más nodos …
-    ],
-    "edges": [
-      {
-        "from": "start",           // id del nodo origen
-        "to": "approval",          // id del nodo destino
-        "label": ""                // condición o texto de la arista (opcional)
-      },
-      … más aristas …
+        "date": "Fecha específica",
+        "title": "Título del evento",
+        "description": "Descripción detallada",
+        "icon": "📄"  // Emoji relevante
+      }
     ]
   }
 }
 
+2. Para COMPARACIÓN:
+{
+  "category": "comparación",
+  "parameters": {
+    "title": "Título descriptivo",
+    "items": [
+      {
+        "name": "Nombre del elemento",
+        "value": 100,
+        "icon": "💼",  // Emoji relevante
+        "color": "bg-blue-500"  // Opcional
+      }
+    ]
+  }
+}
+
+3. Para JERARQUÍA:
+{
+  "category": "jerarquía",
+  "parameters": {
+    "title": "Título descriptivo",
+    "root": {
+      "name": "Nodo principal",
+      "size": 100,
+      "icon": "🏢",  // Emoji relevante
+      "children": [
+        {
+          "name": "Subnodo",
+          "size": 50,
+          "icon": "👥"
+        }
+      ]
+    }
+  }
+}
+
+4. Para RELACIÓN:
+{
+  "category": "relación",
+  "parameters": {
+    "title": "Título descriptivo",
+    "nodes": [
+      {
+        "name": "Nodo 1",
+        "x": 0,    // Valores entre -100 y 100 para mejor distribución
+        "y": 0,    // Valores entre -100 y 100 para mejor distribución
+        "icon": "💡",
+        "color": "bg-blue-500",  // Color opcional
+        "connections": ["Nodo 2"]
+      },
+      {
+        "name": "Nodo 2",
+        "x": 50,   // Ejemplo de posición a la derecha
+        "y": -50,  // Ejemplo de posición arriba
+        "icon": "🔧",
+        "connections": ["Nodo 3"]
+      },
+      {
+        "name": "Nodo 3",
+        "x": -50,  // Ejemplo de posición a la izquierda
+        "y": 50,   // Ejemplo de posición abajo
+        "icon": "📊",
+        "connections": ["Nodo 1"]
+      }
+    ]
+  }
+}
+
+5. Para GEOGRAFÍA:
+{
+  "category": "geografía",
+  "parameters": {
+    "title": "Título descriptivo",
+    "gridLines": 10,  // Opcional: número de líneas en la cuadrícula
+    "areas": [
+      {
+        "name": "Área 1",
+        "startX": 0,   // Porcentaje (0-100)
+        "startY": 0,   // Porcentaje (0-100)
+        "endX": 50,    // Porcentaje (0-100)
+        "endY": 50,    // Porcentaje (0-100)
+        "color": "#E5E7EB"  // Color opcional
+      }
+    ],
+    "nodes": [
+      {
+        "name": "Ubicación 1",
+        "x": 25,      // Porcentaje (0-100)
+        "y": 25,      // Porcentaje (0-100)
+        "icon": "📍",  // Emoji relevante
+        "area": "Área 1",
+        "description": "Descripción de la ubicación"
+      }
+    ]
+  }
+}
 """
 def extract_raw_text(file_name: str, file_bytes: bytes) -> str:
     """
@@ -338,6 +452,7 @@ def refine_all_sections_with_instruction(data: dict, instruction: str) -> dict:
         refined = refine_section_with_instruction(section, instruction)
         refined_sections.append(refined)
     return {"sections": refined_sections}
+
 def json_to_flowchart(data):
     dot = Digraph(comment='Diagrama de Flujo')
     dot.attr(rankdir='LR')
@@ -355,3 +470,141 @@ def json_to_flowchart(data):
             dot.edge(frm, to)
     
     return dot
+
+def contract_to_visualization_json(raw_text: str) -> dict:
+    """
+    Envía el texto del contrato a Gemini usando diagramaprompt y devuelve el JSON de visualización.
+    Args:
+        raw_text: contrato original en texto
+    Returns:
+        Dict con la estructura de visualización
+    """
+    prompt = (
+        "\n\nTEXTO DEL CONTRATO PARA VISUALIZACIÓN:\n\n" + raw_text+diagramaprompt 
+        
+    )
+    model = genai.GenerativeModel(
+        model_name="gemini-2.5-flash-preview-04-17",
+        generation_config=genai.GenerationConfig(response_mime_type="application/json")
+    )
+    response = model.generate_content(prompt)
+    if not response.candidates:
+        raise RuntimeError("La API no devolvió candidatos.")
+    candidate = response.candidates[0]
+    content = (
+        candidate.content.parts[0].text
+        if getattr(candidate, 'content', None) and candidate.content.parts
+        else response.text
+    )
+    cleaned = content.strip().lstrip('```json').rstrip('```').strip()
+    data = json.loads(cleaned, strict=False)
+    if 'category' not in data or 'parameters' not in data:
+        raise ValueError("Respuesta JSON inválida: falta 'category' o 'parameters'.")
+    return data
+
+# Funciones de visualización para cada tipo
+
+def render_timeline(parameters):
+    # parameters: {isTimeline, title, events: [{date, title, description, icon}]}
+    import pandas as pd
+    df = pd.DataFrame(parameters['events'])
+    fig = go.Figure()
+    for i, row in df.iterrows():
+        fig.add_trace(go.Scatter(
+            x=[row['date']],
+            y=[1],
+            mode='markers+text',
+            marker=dict(size=20),
+            text=[f"{row['icon']} {row['title']}<br>{row['description']}"],
+            textposition="top center"
+        ))
+    fig.update_layout(title=parameters.get('title', 'Línea de Tiempo'), showlegend=False, yaxis=dict(visible=False))
+    return fig
+
+def render_comparison(parameters):
+    # parameters: {title, items: [{name, value, icon, color}]}
+    names = [f"{item.get('icon','')} {item['name']}" for item in parameters['items']]
+    values = [item['value'] for item in parameters['items']]
+    colors = [item.get('color', 'blue') for item in parameters['items']]
+    fig = go.Figure([go.Bar(x=names, y=values, marker_color=colors)])
+    fig.update_layout(title=parameters.get('title', 'Comparación'))
+    return fig
+
+def render_hierarchy(parameters):
+    # parameters: {title, root: {...}}
+
+    def build_tree(node):
+        children = [build_tree(child) for child in node.get('children',[])]
+        return anytree.Node(f"{node.get('icon','')} {node['name']}", size=node.get('size',1), children=children)
+    root = build_tree(parameters['root'])
+    dot = anytree.exporter.DotExporter(root)
+    src = Source(''.join(dot))
+    return src
+
+def _map_bg_color_to_hex(bg_color):
+    # Mapea clases tailwind como 'bg-blue-500' a colores hex básicos
+    mapping = {
+        'bg-blue-500': '#3B82F6',
+        'bg-red-500': '#EF4444',
+        'bg-green-500': '#22C55E',
+        'bg-purple-500': '#A21CAF',
+        'bg-gray-500': '#6B7280',
+        'bg-yellow-500': '#EAB308',
+        'bg-pink-500': '#EC4899',
+        'bg-orange-500': '#F97316',
+        'bg-teal-500': '#14B8A6',
+        'bg-indigo-500': '#6366F1',
+    }
+    if not bg_color:
+        return '#3B82F6'
+    if bg_color.startswith('#') and len(bg_color) == 7:
+        return bg_color
+    return mapping.get(bg_color, '#3B82F6')
+
+def render_relation(parameters):
+    # parameters: {title, nodes: [{name, x, y, icon, color, connections}]}
+    G = nx.DiGraph()
+    pos = {}
+    node_colors = []
+    for node in parameters['nodes']:
+        G.add_node(node['name'], icon=node.get('icon',''), color=node.get('color','blue'))
+        pos[node['name']] = (node['x']*3, node['y']*3)
+        node_colors.append(_map_bg_color_to_hex(node.get('color','bg-blue-500')))
+    for node in parameters['nodes']:
+        for conn in node.get('connections', []):
+            G.add_edge(node['name'], conn)
+    fig, ax = plt.subplots(figsize=(12, 8))
+    nx.draw_networkx_nodes(G, pos, node_color=node_colors, node_size=1200, ax=ax)
+    nx.draw_networkx_edges(G, pos, arrowstyle='-|>', arrowsize=30, edge_color='black', ax=ax, connectionstyle='arc3,rad=0.1')
+    # Ajusta el tamaño de fuente y usa bbox para que los nombres no se salgan ni se superpongan
+    nx.draw_networkx_labels(
+        G, pos, font_size=10, font_weight='bold', ax=ax,
+        verticalalignment='bottom',
+        bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.3', alpha=0.8)
+    )
+    ax.set_axis_off()
+    # Ajusta los límites para dejar margen extra
+    x_vals, y_vals = zip(*pos.values())
+    ax.set_xlim(min(x_vals)-20, max(x_vals)+20)
+    ax.set_ylim(min(y_vals)-20, max(y_vals)+20)
+    plt.tight_layout()
+    return fig
+
+def render_geography(parameters):
+    # parameters: {title, gridLines, areas, nodes}
+    fig = go.Figure()
+    for area in parameters.get('areas', []):
+        fig.add_shape(type="rect",
+            x0=area['startX'], y0=area['startY'], x1=area['endX'], y1=area['endY'],
+            line=dict(color=area.get('color','#E5E7EB')),
+            fillcolor=area.get('color','#E5E7EB'), opacity=0.3)
+    for node in parameters.get('nodes', []):
+        fig.add_trace(go.Scatter(
+            x=[node['x']], y=[node['y']],
+            mode='markers+text',
+            marker=dict(size=15),
+            text=[f"{node.get('icon','')} {node['name']}<br>{node.get('description','')}"],
+            textposition="top center"
+        ))
+    fig.update_layout(title=parameters.get('title', 'Geografía'), showlegend=False)
+    return fig
