@@ -123,7 +123,7 @@ def simplification_page():
                         st.error(f"❌ Error durante la modificación: {e}")
 
         for i, sec in enumerate(data['sections']):
-            st.subheader(f"Cláusula {i+1}: {sec['section_title']}")
+            st.subheader(f"{sec['section_title']}")
 
             # Input + botón ARRIBA
             inst_key = f"instruction_section_{i}"

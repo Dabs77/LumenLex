@@ -28,7 +28,12 @@ from anytree.exporter import DotExporter
 from graphviz import Source
 import functools
 import time
+import subprocess
 import re
+import tempfile
+from docx2pdf import convert
+from PyPDF2 import PdfReader
+import pdfplumber
 # 1. Cargar la API Key
 def load_api_key():
     load_dotenv()  # variables locales
@@ -75,16 +80,15 @@ Nunca uses el símbolo $ en el texto simplificado. Siempre escribe la palabra "p
 
 3.  **Estructura y Diseño Accesible (para HTML/Web):**
     * **Descompón cláusulas originales largas que claramente mezclan múltiples temas principales y funcionalmente distintos** en cláusulas separadas y enfocadas. Por ejemplo, si una cláusula original de "Objeto" también detalla extensamente la entrega, el proceso de compra y la reposición, considera crear cláusulas distintas para "Objeto", "Entrega", "Proceso de Compra", "Reposición", etc. **Sin embargo, evita fragmentar excesivamente cláusulas que, aunque puedan tener varios puntos, tratan un tema unificado y coherente** (ej. una única cláusula de "Obligaciones de LA PARTE CONTRATISTA" que enumera varios deberes). En estos casos, la simplificación debe ocurrir *dentro* de los puntos enumerados si el original ya los tenía, o agrupando temáticamente el contenido, manteniendo la cláusula unificada bajo su título original o uno más preciso.
-    * **Asigna numeración secuencial clara** a las cláusulas resultantes (ej., Cláusula 1, Cláusula 2, Cláusula 3...).
-    * Para cada Cláusula o sección principal (Antecedentes, etc.) del contrato *resultante* simplificado, crea **UNA entrada** en la lista `sections` del JSON.
-    * Usa **títulos claros y precisos** para cada cláusula. Si el título original es vago o impreciso (ej., "Unilateralidad" para una cláusula sobre gratuidad), usa uno que refleje mejor el contenido legal real (ej., "Gratuidad de la Tenencia").
-    * **MODIFICADO ADICIONALMENTE:** **DENTRO** de cada entrada del JSON (en el campo `simplified_text`), estructura el contenido para máxima legibilidad digital:
+    * **MODIFICADO ADICIONALMENTE:** **Numeración y Títulos de Secciones/Cláusulas:** Asigna una numeración secuencial arábiga a cada sección principal o cláusula resultante del contrato simplificado (empezando desde 1 para la primera sección, sea "Consideraciones", "Antecedentes" o la primera cláusula numerable). El `section_title` en el JSON debe reflejar esta numeración seguida de un punto, un espacio y el título descriptivo de la sección o cláusula (ej: "1. Consideraciones", "2. Objeto del Contrato", "15. Obligaciones de LA PARTE CONTRATISTA"). Utiliza títulos claros y precisos que reflejen fielmente el contenido legal real de la cláusula. Si el título original es vago o impreciso (ej., "Unilateralidad" para una cláusula sobre gratuidad), mejóralo (ej., "8. Gratuidad de la Tenencia").
+    * Para cada Cláusula o sección principal (Antecedentes, Consideraciones, etc.) del contrato *resultante* simplificado, crea **UNA entrada** en la lista `sections` del JSON.
+    * **DENTRO** de cada entrada del JSON (en el campo `simplified_text`), estructura el contenido para máxima legibilidad digital:
         * **Conserva el formato de párrafo del texto original como la forma de presentación por defecto.** El texto simplificado debe ser continuo, usando solo puntos y comas para separar ideas dentro de los párrafos. **No uses saltos de línea (`\\n`) para separar oraciones dentro de un mismo párrafo o entre párrafos de texto corrido.**
         * **Utiliza una estructura de lista (con ítems separados por `\\n` y marcadores) ÚNICAMENTE en las siguientes situaciones:**
             * **Si el contenido original ya está presentado explícitamente como una lista** (ej. con literales `a), b), c)`; numeración `1., 2., 3.`; o sub-puntos `X.1, X.2`). En este caso, mantén la estructura de lista usando los formatos especificados a continuación.
             * **Si un párrafo original contiene una enumeración clara de múltiples ítems, obligaciones, condiciones, causales o pasos distintos, y presentarlos como una lista mejora significativamente la claridad y la legibilidad en el formato digital.** Esta transformación de párrafo a lista debe ser usada con criterio y de forma excepcional, solo cuando la estructura de párrafo original resulte genuinamente confusa o muy densa para presentar dicha enumeración de forma comprensible.
         * **Cuando se utilice una estructura de lista,** cada ítem debe ser una frase u oración concisa. Para la salida JSON, representa esta lista concatenando los ítems, usando uno de los siguientes formatos de marcadores y separando cada ítem completo (marcador y texto) con un salto de línea `\\n`:
-            * **Formato Numérico:** Utiliza una numeración secuencial. Si los ítems son subpuntos directos de una cláusula principal cuyo título es, por ejemplo, "Cláusula 2: Obligaciones", numéralos como `2.1 Texto del ítem.`, `2.2 Texto del ítem.`, etc. Si es una lista general dentro de una cláusula y no se corresponde directamente con el número de la cláusula principal, puedes usar `1. Texto del ítem.`, `2. Texto del ítem.`, etc.
+            * **Formato Numérico:** Utiliza una numeración secuencial. Si los ítems son subpuntos directos de una cláusula principal cuyo título es, por ejemplo, "2. Obligaciones", numéralos como `2.1 Texto del ítem.`, `2.2 Texto del ítem.`, etc. Si es una lista general dentro de una cláusula y no se corresponde directamente con el número de la cláusula principal, puedes usar `1. Texto del ítem.`, `2. Texto del ítem.`, etc.
             * **Formato Alfabético:** Utiliza literales secuenciales como `a) Texto del ítem.`, `b) Texto del ítem.`, `c) Texto del ítem.`, etc.
         * **Preferencia de Formato para Listas:** Si el texto original ya utiliza un formato de lista específico (ej. `a), b), c)` o `1., 2., 3.` o `II.1, II.2`), utiliza preferentemente ese mismo estilo de formato en la versión simplificada, adaptándolo para la claridad y consistencia con los formatos aquí descritos si es necesario. Si estás transformando una enumeración de un párrafo a una lista (bajo el criterio de excepcionalidad mencionado), puedes elegir el formato (numérico o alfabético) que consideres más claro.
         * Ejemplo de salida JSON para texto en párrafo corrido: `"Este es un párrafo. Describe una idea completa. Este es otro pensamiento dentro del mismo párrafo."`
@@ -107,10 +111,10 @@ Nunca uses el símbolo $ en el texto simplificado. Siempre escribe la palabra "p
 ## 2. Flujo de trabajo LumenLex
 
 1.  **Lee el contrato original completo** para entender su flujo y contenido global.
-2.  **Identifica las secciones y cláusulas originales.** Presta atención a si el texto está en párrafos corridos o si ya utiliza estructuras de lista.
-3.  **Planifica la nueva estructura:** Decide cómo descomponer las cláusulas complejas originales (que mezclan temas funcionalmente distintos) en cláusulas más simples y monotemáticas. Determina si el contenido de una cláusula se mantendrá como párrafo corrido o si, excepcionalmente, una enumeración en un párrafo se transformará a formato de lista para mayor claridad, o si se mantendrá un formato de lista original. Asigna una numeración secuencial provisional a las cláusulas principales.
-4.  Para cada **nueva cláusula simplificada** planificada en el paso 3 (o para secciones como Antecedentes):
-    * **Determina el número y título principal claro y preciso.** Este será el `section_title`.
+2.  **Identifica las secciones y cláusulas originales.** Presta atención a si el texto está en párrafos corridos o si ya utiliza estructuras de lista. Planifica la numeración secuencial de las secciones/cláusulas principales resultantes.
+3.  **Planifica la nueva estructura:** Decide cómo descomponer las cláusulas complejas originales (que mezclan temas funcionalmente distintos) en cláusulas más simples y monotemáticas. Determina si el contenido de una cláusula se mantendrá como párrafo corrido o si, excepcionalmente, una enumeración en un párrafo se transformará a formato de lista para mayor claridad, o si se mantendrá un formato de lista original.
+4.  Para cada **nueva cláusula simplificada** planificada en el paso 3 (o para secciones como Antecedentes/Consideraciones):
+    * **MODIFICADO ADICIONALMENTE:** **Determina el número secuencial de la cláusula/sección y su título descriptivo.** Con base en la numeración planificada (ver punto 1.3), el `section_title` debe ser formateado como `"Número. Título descriptivo"` (ej., `"1. Consideraciones"`, `"2. Objeto del Contrato"`).
     * **Reescribe el contenido** correspondiente del original siguiendo los Principios rectores (Sección 1). **Prioriza el formato de párrafo corrido.** Usa estructuras de lista (con formatos `X.1`, `1.`, o `a)`) y saltos de línea `\\n` únicamente según las condiciones restrictivas del punto 1.3. Recuerda mantener plazos y requisitos específicos. Si la cláusula original ya estaba estructurada como una lista, mantén esa estructura, aplicando el formato de marcador elegido y simplificando cada ítem. Este será el `simplified_text`.
     * **Escribe una justificación breve** (máx. 40 palabras) explicando la estrategia de simplificación para esa Cláusula. Menciona si se mantuvo el formato de párrafo, si se conservó o aplicó un formato de lista específico (y cuál y por qué, especialmente si se transformó un párrafo a lista). Este será el `justification`.
 5.  Construye la lista `sections` del JSON ÚNICAMENTE con las entradas generadas en el paso 4, siguiendo el orden lógico planificado.
@@ -258,32 +262,94 @@ Genera una respuesta en formato JSON siguiendo una de estas estructuras según e
   }
 }
 """
+def _convert_docx_to_pdf_libreoffice(path_docx: str, output_dir: str):
+    """
+    Convierte un .docx a .pdf usando LibreOffice en modo headless.
+    Crea un PDF con el mismo nombre en output_dir.
+    Requiere tener 'soffice' (LibreOffice) en el PATH.
+    """
+    cmd = [
+        "soffice",
+        "--headless",
+        "--convert-to", "pdf",
+        "--outdir", output_dir,
+        path_docx
+    ]
+    proceso = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if proceso.returncode != 0:
+        raise RuntimeError(f"Error al convertir .docx a PDF con LibreOffice:\n{proceso.stderr.decode(errors='ignore')}")
+
 def extract_raw_text(file_name: str, file_bytes: bytes) -> str:
     """
-    Extrae todo el texto de un archivo .docx o .pdf.
-    Args:
-        file_name: nombre del archivo (extensión)
-        file_bytes: contenido binario
-    Returns:
-        Texto extraído como str
+    Extrae texto de .docx o .pdf. Si es .docx, primero lo convierte a PDF
+    (con LibreOffice o docx2pdf) y luego extrae el texto del PDF con pdfplumber,
+    de modo que las listas (a), b), 1., 2., •, etc.) se incluyan como texto.
     """
-    if file_name.lower().endswith(".docx"):
-        doc = Document(io.BytesIO(file_bytes))
-        text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
-    elif file_name.lower().endswith(".pdf"):
-        reader = PdfReader(io.BytesIO(file_bytes))
-        if reader.is_encrypted:
+    lower = file_name.lower()
+
+    # ---------- CASO A: LLEGA UN .DOCX ------------
+    if lower.endswith(".docx"):
+        # 1) Guardar el .docx en un archivo temporal
+        tmp_docx = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
+        tmp_docx.write(file_bytes)
+        tmp_docx.flush()
+        tmp_docx.close()
+
+        # 2) Elegir método de conversión:
+        #    Opción 1: LibreOffice (Linux, macOS, Windows sin Word)
+        tmp_pdf_path = tmp_docx.name.replace(".docx", ".pdf")
+        try:
+            _convert_docx_to_pdf_libreoffice(tmp_docx.name, os.path.dirname(tmp_pdf_path))
+        except FileNotFoundError:
+            # Si no está 'soffice' en el PATH, intenta docx2pdf (Windows/macOS + Word)
             try:
-                reader.decrypt("")
-            except Exception:
-                pass
-        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+                from docx2pdf import convert
+            except ImportError:
+                os.unlink(tmp_docx.name)
+                raise RuntimeError(
+                    "Ni 'soffice' ni 'docx2pdf' disponibles. "
+                    "Instala LibreOffice en el PATH o pip install docx2pdf."
+                )
+            # docx2pdf crea el .pdf en la misma carpeta:
+            convert(tmp_docx.name, tmp_pdf_path)
+
+        # 3) Abrir el PDF resultante con pdfplumber y recuperar texto completo
+        texto_paginas = []
+        try:
+            with pdfplumber.open(tmp_pdf_path) as pdf:
+                for pagina in pdf.pages:
+                    texto_paginas.append(pagina.extract_text() or "")
+            texto = "\n".join(texto_paginas).strip()
+        finally:
+            # Limpiar archivos temporales
+            os.unlink(tmp_docx.name)
+            if os.path.exists(tmp_pdf_path):
+                os.unlink(tmp_pdf_path)
+
+    # ---------- CASO B: LLEGA UN .PDF ------------
+    elif lower.endswith(".pdf"):
+        # 1) Guardar el PDF recibido en un temporal
+        tmp_pdf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+        tmp_pdf.write(file_bytes)
+        tmp_pdf.flush()
+        tmp_pdf.close()
+
+        # 2) Extraer con pdfplumber (mejor preserva viñetas/numera ción)
+        texto_paginas = []
+        try:
+            with pdfplumber.open(tmp_pdf.name) as pdf:
+                for pagina in pdf.pages:
+                    texto_paginas.append(pagina.extract_text() or "")
+            texto = "\n".join(texto_paginas).strip()
+        finally:
+            os.unlink(tmp_pdf.name)
+
     else:
         raise ValueError("Formato no soportado. Usa .docx o .pdf")
-    if not text.strip():
-        raise ValueError("No se extrajo texto válido del documento.")
-    return text
 
+    if not texto:
+        raise ValueError("No se extrajo texto válido del documento.")
+    return texto
 
 def simplify_contract(raw_text: str) -> dict:
     """
@@ -363,7 +429,7 @@ def generate_html(data: dict, source_filename: str) -> str:
         paras = ''.join(f"<p>{line}</p>" for line in raw.split("\n") if line.strip())
         just = sec.get('justification', '')
         html += f"""
-  <h2>{i}. {title}</h2>
+  <h2>{title}</h2>
   {paras}
   <div class=\"justification\"><strong>Justificación:</strong> {just}</div>
   <hr/>
