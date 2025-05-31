@@ -26,6 +26,9 @@ import matplotlib.pyplot as plt
 import anytree
 from anytree.exporter import DotExporter
 from graphviz import Source
+import functools
+import time
+import re
 # 1. Cargar la API Key
 def load_api_key():
     load_dotenv()  # variables locales
@@ -297,7 +300,14 @@ def simplify_contract(raw_text: str) -> dict:
         else response.text
     )
     cleaned = content.strip().lstrip('```json').rstrip('```').strip()
-    data = json.loads(cleaned, strict=False)
+    # Intenta extraer solo el bloque JSON (entre { y } o [ y ])
+    match = re.search(r'({[\s\S]*})', cleaned) or re.search(r'(\[[\s\S]*\])', cleaned)
+    if match:
+        cleaned = match.group(1)
+    try:
+        data = json.loads(cleaned, strict=False)
+    except Exception as e:
+        raise ValueError(f"Error al parsear JSON de Gemini: {e}\nRespuesta cruda:\n{cleaned}")
     if 'sections' not in data or not isinstance(data['sections'], list):
         raise ValueError("Respuesta JSON inválida: falta 'sections'.")
     return data
@@ -608,3 +618,115 @@ def render_geography(parameters):
         ))
     fig.update_layout(title=parameters.get('title', 'Geografía'), showlegend=False)
     return fig
+
+def restructure_sections_with_instruction(data: dict, instruction: str) -> dict:
+    """
+    Permite eliminar o combinar secciones del contrato simplificado según una instrucción global.
+    Envía el JSON completo y la instrucción a Gemini y espera un nuevo JSON con la estructura modificada.
+    """
+    prompt = f"""
+    Eres LumenLex, experto en simplificación y edición de contratos. 
+    A continuación tienes el contrato simplificado en formato JSON (solo el array de 'sections').
+    Aplica la siguiente instrucción global, que puede implicar eliminar secciones, fusionar varias en una sola, o ambas cosas:
+
+    INSTRUCCIÓN:
+    """
+    {instruction}
+    """
+
+    IMPORTANTE:
+    - Si debes combinar secciones, crea una nueva sección con un título claro y unifica los textos y justificaciones.
+    - Si debes eliminar secciones, simplemente omítelas del array final.
+    - Devuelve SOLO el array de 'sections' resultante, sin ningún texto adicional.
+
+    CONTRATO SIMPLIFICADO (array de secciones):
+    {json.dumps(data['sections'], ensure_ascii=False, indent=2)}
+
+    Devuelve el array de secciones resultante en formato JSON.
+    """
+    model = genai.GenerativeModel(
+        model_name="gemini-2.5-flash-preview-04-17",
+        generation_config=genai.GenerationConfig(response_mime_type="application/json")
+    )
+    response = model.generate_content(prompt)
+    if not response.candidates:
+        raise RuntimeError("La API no devolvió candidatos.")
+    candidate = response.candidates[0]
+    content = (
+        candidate.content.parts[0].text
+        if getattr(candidate, 'content', None) and candidate.content.parts
+        else response.text
+    )
+    cleaned = content.strip().lstrip('```json').rstrip('```').strip()
+    sections = json.loads(cleaned, strict=False)
+    if not isinstance(sections, list):
+        raise ValueError("La respuesta no es un array de secciones.")
+    return {"sections": sections}
+
+def general_restructure_contract(text: str, instruction: str, response: dict) -> dict:
+    """
+    Reestructura el contrato simplificado según la instrucción dada.
+    Solo revisa el texto original si la instrucción requiere buscar o agregar algo que no está en el JSON.
+    Devuelve un nuevo JSON con el mismo formato que la primera vez que se simplificó (clave 'sections').
+    """
+    print("menas")
+    print(instruction)
+    prompt = f"""
+    Eres LumenLex, experto en simplificación y edición de contratos.
+    Recibes el siguiente json: 
+    {response}
+    
+    A ese json debes aplicar la siguiente instrucción:
+    {instruction}
+    Devuelve SOLO el nuevo JSON MODIFICADO, sin ningún texto adicional, de la siguiente forma:
+    """ + """
+    ## 3. Salida estricta en JSON (¡NO AÑADAS TEXTO ADICIONAL FUERA DEL JSON!)
+json
+{
+  "type": "object",
+  "properties": {
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "section_title":      { "type": "string" },
+          "simplified_text":   { "type": "string" },
+          "justification":      { "type": "string" }
+        },
+        "required": ["section_title","simplified_text","justification"]
+      }
+    }
+  },
+  "required": ["sections"]
+}
+    """
+
+    model = genai.GenerativeModel(
+        model_name="gemini-2.5-flash-preview-04-17",
+        generation_config=genai.GenerationConfig(response_mime_type="application/json")
+    )
+    print(prompt)
+    response_llm = model.generate_content(prompt)
+    
+    if not response_llm.candidates:
+        raise RuntimeError("La API no devolvió candidatos.")
+    candidate = response_llm.candidates[0]
+    content = (
+        candidate.content.parts[0].text
+        if getattr(candidate, 'content', None) and candidate.content.parts
+        else response_llm.text
+    )
+    print(content)
+    cleaned = content.strip().lstrip('```json').rstrip('```').strip()
+    # Intenta extraer solo el bloque JSON (entre { y } o [ y ])
+    match = re.search(r'({[\s\S]*})', cleaned) or re.search(r'(\[[\s\S]*\])', cleaned)
+    if match:
+        cleaned = match.group(1)
+    try:
+        data = json.loads(cleaned, strict=False)
+    except Exception as e:
+        raise ValueError(f"Error al parsear JSON de Gemini: {e}\nRespuesta cruda:\n{cleaned}")
+    if 'sections' not in data or not isinstance(data['sections'], list):
+        raise ValueError("Respuesta JSON inválida: falta 'sections'.")
+    return data

@@ -14,7 +14,8 @@ from functions import (
     render_comparison,
     render_hierarchy,
     render_relation,
-    render_geography
+    render_geography,
+    general_restructure_contract
 )
 
 RAW_KEY = 'raw_text'
@@ -97,22 +98,29 @@ def simplification_page():
 
         st.header("✅ Secciones simplificadas con edición individual")
 
-        # NUEVO: Edición global de todas las secciones
-        st.subheader("✏️ Edición global de todas las secciones")
-        global_instruction = st.text_input(
-            label="¿Qué cambio quieres aplicar a TODO el contrato simplificado? (Ejemplo: 'Haz todo el texto más formal', 'Hazlo más breve', 'Hazlo más claro para personas sin formación legal')",
-            key="global_instruction_input"
+        # CAMPO ÚNICO: Modificación general del documento simplificado
+        st.subheader("🛠️ Modificación general del documento simplificado")
+        general_instruction = st.text_area(
+            label="¿Qué cambio general quieres aplicar al documento simplificado? (Ejemplo: 'Fusiona las cláusulas 2 y 3', 'Haz todo el texto más claro', 'Elimina la cláusula de penalidad', etc.)",
+            key="general_instruction_input"
         )
-        if st.button("Refinar TODO el contrato", key="refine_all_btn"):
-            if not global_instruction.strip():
-                st.warning("Por favor ingresa una instrucción global para refinar el contrato.")
+        if st.button("Aplicar modificación general", key="general_modification_btn"):
+            if not general_instruction.strip():
+                st.warning("Por favor ingresa una instrucción para modificar el documento.")
             else:
-                with st.spinner("Refinando TODO el contrato con Gemini..."):
-                    new_data = refine_all_sections_with_instruction(data, global_instruction)
-                    st.session_state[DATA_KEY] = new_data
-                    regenerate_outputs()
-                    st.success("¡Contrato completo refinado y actualizado!")
-                data = st.session_state[DATA_KEY]  # actualizar variable local
+                with st.spinner("Modificando el documento con Gemini..."):
+                    try:
+                        new_data = general_restructure_contract(
+                            text=raw,
+                            instruction=general_instruction,
+                            response=json.dumps(data, ensure_ascii=False)
+                        )
+                        st.session_state[DATA_KEY] = new_data
+                        regenerate_outputs()
+                        st.success("¡Documento modificado y actualizado!")
+                        data = st.session_state[DATA_KEY]
+                    except Exception as e:
+                        st.error(f"❌ Error durante la modificación: {e}")
 
         for i, sec in enumerate(data['sections']):
             st.subheader(f"Cláusula {i+1}: {sec['section_title']}")
