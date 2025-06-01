@@ -17,22 +17,15 @@ import json
 from datetime import datetime
 from dotenv import load_dotenv
 import google.generativeai as genai
-from docx import Document
-from pypdf import PdfReader
 import streamlit as st
 import plotly.graph_objects as go
 import networkx as nx
 import matplotlib.pyplot as plt
 import anytree
-from anytree.exporter import DotExporter
 from graphviz import Source
-import functools
-import time
 import subprocess
 import re
 import tempfile
-from docx2pdf import convert
-from PyPDF2 import PdfReader
 import pdfplumber
 # 1. Cargar la API Key
 def load_api_key():
