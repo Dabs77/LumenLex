@@ -27,6 +27,7 @@ import subprocess
 import re
 import tempfile
 import pdfplumber
+from docx import Document as DocxReader 
 # 1. Cargar la API Key
 def load_api_key():
     load_dotenv()  # variables locales
@@ -274,60 +275,80 @@ def _convert_docx_to_pdf_libreoffice(path_docx: str, output_dir: str):
 
 def extract_raw_text(file_name: str, file_bytes: bytes) -> str:
     """
-    Extrae texto de .docx o .pdf. Si es .docx, primero lo convierte a PDF
-    (con LibreOffice o docx2pdf) y luego extrae el texto del PDF con pdfplumber,
-    de modo que las listas (a), b), 1., 2., •, etc.) se incluyan como texto.
+    Extrae texto de un .docx o .pdf.
+    
+    - Si es .docx, primero intenta convertirlo a PDF con LibreOffice y después extraer texto
+      con pdfplumber (para preservar viñetas/listas).
+    - Si la conversión con LibreOffice falla (p. ej. en Linux sin soffice instalado),
+      cae en un fallback que utiliza python-docx para extraer el texto directamente
+      del .docx (sin pasar por PDF).
+    - Si es .pdf, utiliza pdfplumber para extraer texto directamente.
     """
     lower = file_name.lower()
 
-    # ---------- CASO A: LLEGA UN .DOCX ------------
+    # ---------- CASO A: LLEGA UN .DOCX ------------ 
     if lower.endswith(".docx"):
-        # 1) Guardar el .docx en un archivo temporal
+        # 1) Guardar el .docx en un temporal
         tmp_docx = tempfile.NamedTemporaryFile(suffix=".docx", delete=False)
         tmp_docx.write(file_bytes)
         tmp_docx.flush()
         tmp_docx.close()
 
-        # 2) Elegir método de conversión:
-        #    Opción 1: LibreOffice (Linux, macOS, Windows sin Word)
         tmp_pdf_path = tmp_docx.name.replace(".docx", ".pdf")
+        texto = ""
+
+        # 2) Intentar convertir con LibreOffice a PDF para luego usar pdfplumber
         try:
             _convert_docx_to_pdf_libreoffice(tmp_docx.name, os.path.dirname(tmp_pdf_path))
-        except FileNotFoundError:
-            # Si no está 'soffice' en el PATH, intenta docx2pdf (Windows/macOS + Word)
-            try:
-                from docx2pdf import convert
-            except ImportError:
-                os.unlink(tmp_docx.name)
-                raise RuntimeError(
-                    "Ni 'soffice' ni 'docx2pdf' disponibles. "
-                    "Instala LibreOffice en el PATH o pip install docx2pdf."
-                )
-            # docx2pdf crea el .pdf en la misma carpeta:
-            convert(tmp_docx.name, tmp_pdf_path)
-
-        # 3) Abrir el PDF resultante con pdfplumber y recuperar texto completo
-        texto_paginas = []
-        try:
+            # Si esta línea no arroja excepción, ahora debería existir tmp_pdf_path
+            # Extraemos texto de ese PDF con pdfplumber:
+            texto_paginas = []
             with pdfplumber.open(tmp_pdf_path) as pdf:
                 for pagina in pdf.pages:
                     texto_paginas.append(pagina.extract_text() or "")
             texto = "\n".join(texto_paginas).strip()
-        finally:
+
             # Limpiar archivos temporales
             os.unlink(tmp_docx.name)
             if os.path.exists(tmp_pdf_path):
                 os.unlink(tmp_pdf_path)
 
-    # ---------- CASO B: LLEGA UN .PDF ------------
+        except Exception:
+            # --- FALLBACK: LibreOffice NO está instalado o la conversión falló ---
+            # Intentamos extraer directamente con python-docx:
+            try:
+                doc = DocxReader(tmp_docx.name)
+                # Concatenamos todos los párrafos no vacíos
+                partes = [p.text for p in doc.paragraphs if p.text and p.text.strip()]
+                texto = "\n".join(partes).strip()
+            except Exception as e_docx:
+                # Si tampoco está python-docx o hay algún error leyendo el .docx, avisamos:
+                # Limpiamos antes el temporal y lanzamos un error claro.
+                os.unlink(tmp_docx.name)
+                raise RuntimeError(
+                    "No se pudo convertir el .docx a PDF (falta LibreOffice) "
+                    "ni extraer texto con python-docx. "
+                    "Instala LibreOffice o python-docx.\n"
+                    f"Detalles internos: {e_docx}"
+                )
+            finally:
+                # Borrar el archivo .docx temporal
+                if os.path.exists(tmp_docx.name):
+                    os.unlink(tmp_docx.name)
+
+            # Ya tenemos 'texto' con el contenido extraído y podemos retornarlo:
+            if not texto:
+                raise ValueError("No se extrajo texto válido del .docx usando python-docx.")
+            return texto
+
+    # ---------- CASO B: LLEGA UN .PDF ------------ 
     elif lower.endswith(".pdf"):
-        # 1) Guardar el PDF recibido en un temporal
+        # 1) Guardar el PDF en un temporal
         tmp_pdf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
         tmp_pdf.write(file_bytes)
         tmp_pdf.flush()
         tmp_pdf.close()
 
-        # 2) Extraer con pdfplumber (mejor preserva viñetas/numera ción)
         texto_paginas = []
         try:
             with pdfplumber.open(tmp_pdf.name) as pdf:
@@ -343,6 +364,33 @@ def extract_raw_text(file_name: str, file_bytes: bytes) -> str:
     if not texto:
         raise ValueError("No se extrajo texto válido del documento.")
     return texto
+
+
+# --------------------------------------------------------------------
+# Necesitas definir esta función para invocar LibreOffice en caso de que
+# quieras mantener esa ruta (solo aplica si tu máquina local tiene soffice):
+# --------------------------------------------------------------------
+def _convert_docx_to_pdf_libreoffice(docx_path: str, output_dir: str):
+    """
+    Convierte un .docx a .pdf usando LibreOffice en modo headless.
+    Esto debería funcionar en Linux, macOS y Windows si LibreOffice está en el PATH.
+
+    Lanza FileNotFoundError si 'soffice' no existe en el PATH.
+    Lanza CalledProcessError si la conversión falla.
+    """
+    import subprocess
+
+    # El comando 'soffice' es el binario de LibreOffice (Linux/Mac/Windows).
+    # --headless para que no abra GUI; --convert-to pdf para conversión.
+    cmd = [
+        "soffice",
+        "--headless",
+        "--convert-to", "pdf",
+        "--outdir", output_dir,
+        docx_path
+    ]
+    # Esto puede lanzar FileNotFoundError (si no está soffice) o CalledProcessError.
+    subprocess.run(cmd, check=True)
 
 def simplify_contract(raw_text: str) -> dict:
     """
